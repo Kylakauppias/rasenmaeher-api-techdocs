@@ -1,0 +1,63 @@
+
+name: Release
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Install dependencies
+        run: |
+          python -m venv venv
+          source venv/bin/activate
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+      - name: Start API server
+        run: |
+          source venv/bin/activate
+          uvicorn main:app --host 0.0.0.0 --port 8000 &
+      - name: Wait for API to be ready
+        run: |
+          for i in {1..30}; do
+            if curl -s http://0.0.0.0:8000/openapi.json > /dev/null; then
+              break
+            fi
+            sleep 1
+          done
+      - name: Fetch all tags
+        run: git fetch --tags
+      - name: Get latest tag
+        id: get_tag
+        run: |
+          latest_tag=$(git tag --sort=-v:refname | head -n 1)
+          echo "latest_tag=$latest_tag" >> $GITHUB_OUTPUT
+      - name: Bump version and push tag
+        id: tag
+        uses: mathieudutour/github-tag-action@v5
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          default_bump: patch
+          tag_prefix: ""
+          release_branches: main
+          pre_release_branches: ""
+      - name: Set tag for release
+        run: echo "TAG_NAME=${{ steps.tag.outputs.new_tag }}" >> $GITHUB_ENV
+      - name: Fetch OpenAPI JSON
+        run: |
+          curl -s http://0.0.0.0:8000/openapi.json -o openapi.json
+      - name: Upload openapi.json as release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: openapi.json
+          tag_name: ${{ steps.tag.outputs.new_tag }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
